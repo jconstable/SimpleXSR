@@ -49,7 +49,7 @@ If you are encountering issues with your references saving, you can enable more 
 * Add some better diagnostics/messaging about links that are never resolved
 * Determine if links should continue to use string GUIDs at runtime, or if there is a need for a more efficient comparison type
 
-### Sample example of generated code
+### Small example of generated code
 This is a sample of the codegen output that SimpleXSR uses at runtime for link resolution assignment.
 ```
 // CrossSceneReference manager passes resolved link data into this entry point
