@@ -17,6 +17,16 @@ namespace SimpleCrossSceneReferences.Editor
     [InitializeOnLoad]
     public static class SceneSavedPostProcessor
     {
+        // Enum defining what Object types we support
+        public enum SupportedObjectType
+        {
+            NULL,
+            GameObject,
+            Transform,
+            Component,
+            MonoBehaviour
+        }
+        
         // Constructor sets up listeners for scene saving
         static SceneSavedPostProcessor()
         {
@@ -64,9 +74,24 @@ namespace SimpleCrossSceneReferences.Editor
                         // Get the field's current value
                         UnityEngine.Object fieldValue =
                             fieldInfo.FieldInfo.GetValue(refUsage) as UnityEngine.Object;
-                        
-                        if (fieldValue != null)
+
+                        if (fieldValue == null)
                         {
+                            CreateNullResolver(resolver, refUsage, fieldInfo);
+                        } 
+                        else 
+                        {
+                            SupportedObjectType type;
+                            GameObject fieldValueGameObject = GetGameObject(fieldValue, out type);
+                            // We don't need to store anything for references within the same scene
+                            if (fieldValueGameObject.scene == refUsage.gameObject.scene)
+                            {
+                                // Null out any existing resolver data pointing to this field
+                                CreateNullResolver(resolver, refUsage, fieldInfo);
+                                continue;
+                            }
+                                
+                            
                             // Set up a CrossSceneReferenceLocator and get the GUID which has been assigned to that object
                             string referencedGUID = GetCrossSceneReferenceGUID(fieldValue);
 
@@ -94,6 +119,11 @@ namespace SimpleCrossSceneReferences.Editor
             timer.Stop();
             UnityEngine.Debug.Log($"XSR scene processing took {timer.ElapsedMilliseconds}ms for scene {scene.name}");
 #endif
+        }
+
+        static void CreateNullResolver(CrossSceneReferenceResolver resolver, MonoBehaviour refUsage, CodegenClassMember fieldInfo)
+        {
+            CollectResolveData(resolver, refUsage, fieldInfo.FieldInfo, null);
         }
 
         // EditorSceneManager.sceneSaved listener
@@ -139,9 +169,7 @@ namespace SimpleCrossSceneReferences.Editor
         static void CollectResolveData(CrossSceneReferenceResolver resolver, UnityEngine.Object target, FieldInfo field,
             string GUID)
         {
-            if (resolver != null &&
-                target != null &&
-                !string.IsNullOrEmpty(GUID))
+            if (resolver != null)
             {
                 CrossSceneReferenceSetupData data = new CrossSceneReferenceSetupData()
                 {
@@ -150,9 +178,44 @@ namespace SimpleCrossSceneReferences.Editor
                     Target = target,
                     GUID = GUID
                 };
-                resolver.ResolverData.Add(data);
+                resolver.AddResolverData(data);
             }
         }
+
+        static GameObject GetGameObject(UnityEngine.Object target, out SupportedObjectType type)
+        {
+            type = SupportedObjectType.NULL;
+            if (target == null)
+                return null;
+
+            if (target is Transform asTransform)
+            {
+                type = SupportedObjectType.Transform;
+                return asTransform.gameObject;
+            }
+
+            if (target is GameObject asGo)
+            {
+                type = SupportedObjectType.GameObject;
+                return asGo;
+            }
+
+            if (target is MonoBehaviour asBehaviour)
+            {
+                type = SupportedObjectType.MonoBehaviour;
+                return asBehaviour.gameObject;
+            }
+
+            if (target is Component asComponent)
+            {
+                type = SupportedObjectType.Component;
+                return asComponent.gameObject;
+            }
+
+            return null;
+        }
+
+        
 
         // Generate a GUID to identify target at runtime
         static string GetCrossSceneReferenceGUID(UnityEngine.Object target)
@@ -160,52 +223,40 @@ namespace SimpleCrossSceneReferences.Editor
             if (target == null)
                 return null;
 
-            if (target is Transform asTransform)
-            {
-                CrossSceneReferenceLocator loc = GetOrCreateLocator(asTransform.gameObject);
-                return loc.TransformGUID;
-            }
+            SupportedObjectType type;
+            GameObject targetObject = GetGameObject(target, out type);
+            if (type == SupportedObjectType.NULL)
+                return null;
 
-            if (target is GameObject asGo)
+            CrossSceneReferenceLocator loc = GetOrCreateLocator(targetObject);
+            switch (type)
             {
-                CrossSceneReferenceLocator loc = GetOrCreateLocator(asGo);
-                return loc.GameObjectGUID;
-            }
+                case SupportedObjectType.Transform:
+                    return loc.TransformGUID;
+                case SupportedObjectType.GameObject:
+                    return loc.GameObjectGUID;
+                case SupportedObjectType.MonoBehaviour:
+                case SupportedObjectType.Component:
+                    Component comp = target as Component;;
+                    for (int i = 0; i < loc.Components.Count; i++)
+                    {
+                        // If there is already a GUID for this object, return it
+                        if (loc.Components[i] == comp)
+                            return loc.ComponentGUIDS[i];
+                    }
 
-            // Components and MonoBehaviours are treated the same
-            Component comp = null;
-            if (target is MonoBehaviour asBehaviour)
-            {
-                comp = asBehaviour;
-            }
-            if (target is Component asComponent)
-            {
-                comp = asComponent;
-            }
-
-            // Components and MonoBehaviours are treated the same
-            if(comp != null)
-            {
-                CrossSceneReferenceLocator loc = GetOrCreateLocator(comp.gameObject);
-                for (int i = 0; i < loc.Components.Count; i++)
-                {
-                    // If there is already a GUID for this object, return it
-                    if (loc.Components[i] == comp)
-                        return loc.ComponentGUIDS[i];
-                }
-
-                // Create a new GUID if needed
-                string guid = GUID.Generate().ToString();
-                loc.ComponentGUIDS.Add(guid);
-                loc.Components.Add(comp);
+                    // Create a new GUID if needed
+                    string guid = GUID.Generate().ToString();
+                    loc.ComponentGUIDS.Add(guid);
+                    loc.Components.Add(comp);
                 
-                Scene scene = comp.gameObject.scene;
-                EditorSceneManager.MarkSceneDirty(scene);
+                    Scene scene = comp.gameObject.scene;
+                    EditorSceneManager.MarkSceneDirty(scene);
 
-                return guid;
+                    return guid;
+                default:
+                    throw new Exception($"Field of Type {target.GetType()} cannot be marked as a CrossSceneReference.");
             }
-
-            throw new Exception($"Field of Type {target.GetType()} cannot be marked as a CrossSceneReference.");
         }
 
         // Find or create a locator on the given target

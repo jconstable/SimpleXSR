@@ -24,6 +24,30 @@ namespace SimpleCrossSceneReferences
                 instance.RegisterResolver(resolver);
             }
         }
+
+        public void AddResolverData(CrossSceneReferenceSetupData data)
+        {
+            bool updated = false;
+            for (int i = 0; i < ResolverData.Count; i++)
+            {
+                CrossSceneReferenceSetupData existingData = ResolverData[i];
+                if (existingData.ClassHash == data.ClassHash &&
+                    existingData.FieldHash == data.FieldHash &&
+                    existingData.Target == data.Target)
+                {
+                    existingData.GUID = data.GUID;
+                    ResolverData[i] = existingData;
+                    updated = true;
+                }
+            }
+
+            if (!updated)
+            {
+                ResolverData.Add(data);
+            }
+
+            Prune();
+        }
         
         // Remove null entries from the list
         public void Prune()
@@ -31,7 +55,7 @@ namespace SimpleCrossSceneReferences
             for (int i = ResolverData.Count - 1; i >= 0; i--)
             {
                 var data = ResolverData[i];
-                if (data.Target == null)
+                if (string.IsNullOrEmpty(data.GUID) || data.Target == null)
                 {
                     ResolverData.RemoveAt(i);
                 }
