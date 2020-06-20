@@ -48,3 +48,46 @@ If you are encountering issues with your references saving, you can enable more 
 * Detect when the Editor is exiting playmode, and prevent creation of a new singleton manager in cleanup code.
 * Add some better diagnostics/messaging about links that are never resolved
 * Determine if links should continue to use string GUIDs at runtime, or if there is a need for a more efficient comparison type
+
+### Sample example of generated code
+This is a sample of the codegen output that SimpleXSR uses at runtime for link resolution assignment.
+```
+// CrossSceneReference manager passes resolved link data into this entry point
+public static class CrossSceneReference_Codegen_Entry {
+    public static void Set(int classHash, int fieldHash, UnityEngine.Object target, UnityEngine.Object value){
+        if(classHash == -1458364425) {
+            SimpleBehaviour_XSR_Codegen.Set(fieldHash, target, value);
+            return;
+        }
+        if(classHash == 1117548823) {
+            OtherSimpleBehaviour_XSR_Codegen.Set(fieldHash, target, value);
+            return;
+        }
+        throw new Exception($"Unable to resolve class for classHash {classHash}.");
+    }
+}
+public static class SimpleBehaviour_XSR_Codegen {
+    public static void Set(int fieldHash, UnityEngine.Object target, UnityEngine.Object value){
+        SimpleBehaviour behaviour = target as SimpleBehaviour;
+        if(fieldHash == -582599340) {
+            behaviour.Other = value as UnityEngine.GameObject;
+            return;
+        }
+        if(fieldHash == 1629313707) {
+            behaviour.Anim = value as UnityEngine.Animator;
+            return;
+        }
+        throw new Exception($"Unable to resolve field for fieldHash {fieldHash}.");
+    }
+}
+public static class OtherSimpleBehaviour_XSR_Codegen {
+    public static void Set(int fieldHash, UnityEngine.Object target, UnityEngine.Object value){
+        OtherSimpleBehaviour behaviour = target as OtherSimpleBehaviour;
+        if(fieldHash == 372029379) {
+            behaviour.Other = value as UnityEngine.GameObject;
+            return;
+        }
+        throw new Exception($"Unable to resolve field for fieldHash {fieldHash}.");
+    }
+}
+```
