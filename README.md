@@ -42,3 +42,9 @@ At runtime, when CrossSceneReferenceLocator and CrossSceneReferenceResolver Awak
 
 ## Troubleshooting
 If you are encountering issues with your references saving, you can enable more inspector functionality by adding the SIMPLE_CROSS_SCENE_REFERENCES_DEBUG define to your Player's scripting defines.
+
+## TODO
+* Better enforcement of GUID uniqueness
+* Detect when the Editor is exiting playmode, and prevent creation of a new singleton manager in cleanup code.
+* Add some better diagnostics/messaging about links that are never resolved
+* Determine if links should continue to use string GUIDs at runtime, or if there is a need for a more efficient comparison type
