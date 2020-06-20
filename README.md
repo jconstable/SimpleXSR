@@ -38,5 +38,7 @@ When a Scene is saved, SimpleXSR will scan the Scene for XSRBehaviours, and add 
 
 These behaviours store only references to Objects within the same Scene, as well as string and integer data used to resolve links at runtime. A single link requires ~500bytes of memory total.
 
+At runtime, when CrossSceneReferenceLocator and CrossSceneReferenceResolver Awake(), they will register with a Singleton manager that attempts to establish links. These links will be given to the automatically generated class, which handles field value assignment.
+
 ## Troubleshooting
 If you are encountering issues with your references saving, you can enable more inspector functionality by adding the SIMPLE_CROSS_SCENE_REFERENCES_DEBUG define to your Player's scripting defines.
