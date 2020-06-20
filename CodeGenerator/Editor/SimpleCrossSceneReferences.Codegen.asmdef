@@ -1,0 +1,17 @@
+{
+    "name": "SimpleCrossSceneReferences.Codegen",
+    "references": [
+        "GUID:a2d27c3bac14af6408a7edf9191670cf"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
