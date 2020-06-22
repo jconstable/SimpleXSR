@@ -17,6 +17,12 @@ Once SimpleXSR is installed, Unity will no longer prevent your from dragging and
 public class MyBehaviour : MonoBehaviour {
     [CrossSceneReference]
     public GameObject OtherObject;
+    
+    [CrossSceneReference]
+    public Transform OtherTransform;
+    
+    [CrossSceneREference]
+    public MyBehaviour OtherBehaviour;
 }
 ```
 
