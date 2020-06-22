@@ -21,7 +21,7 @@ public class MyBehaviour : MonoBehaviour {
     [CrossSceneReference]
     public Transform OtherTransform;
     
-    [CrossSceneREference]
+    [CrossSceneReference]
     public MyBehaviour OtherBehaviour;
 }
 ```
