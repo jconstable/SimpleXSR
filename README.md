@@ -9,8 +9,7 @@ SimpleXSR provides an easy way to support cross-scene references in Unity, at a 
 * Components (necessarily including MonoBehaviours)
 
 ## Known issues
-* GUIDs need to be stripped from Prefabs
-* GUIDs need to be regenerated upon copy of a CrossSceneReferenceLocator
+* Error when exiting play mode, due to recreation of Manager instance
 
 ## Installation
 Simply clone this repository into your Assets folder. The Editor scripts will handle setup and codegen.
