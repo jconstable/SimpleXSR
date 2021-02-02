@@ -2,11 +2,15 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Playables;
 using UnityEngine.SceneManagement;
+using UnityEngine.Timeline;
+using Debug = UnityEngine.Debug;
 using Object = System.Object;
 
 namespace SimpleCrossSceneReferences.Editor
@@ -24,7 +28,8 @@ namespace SimpleCrossSceneReferences.Editor
             GameObject,
             Transform,
             Component,
-            MonoBehaviour
+            MonoBehaviour,
+            CrossSceneReferenceProxy
         }
         
         // Constructor sets up listeners for scene saving
@@ -40,16 +45,25 @@ namespace SimpleCrossSceneReferences.Editor
         }
 
         // Temporary class used to restore cross-scene refs that were unset during Scene save
-        public class TemporaryLinkResolver
+        public interface LinkResolver { }
+        
+        public class TemporaryLinkResolver : LinkResolver
         {
             public Object Target;
-            public FieldInfo Field;
+            public Object Route;
             public Object Value;
         }
-        
+        public class TemporaryProxyLinkResolver : LinkResolver
+        {
+            public Type ProxyType;
+            public Object Target;
+            public Object Value;
+            public Object Context;
+        }
+
         // Because we have to null out fields that store XSRs, maintain a list of these values so we can set the values
         // back after Scene saving is complete
-        private static Dictionary<Scene,List<TemporaryLinkResolver>> TemporaryResolvers = new Dictionary<Scene,List<TemporaryLinkResolver>>();
+        private static Dictionary<Scene,List<LinkResolver>> TemporaryResolvers = new Dictionary<Scene,List<LinkResolver>>();
 
         // EditorSceneManager.sceneSaving listener
         static void OnSceneSaving(Scene scene, string path)
@@ -59,60 +73,24 @@ namespace SimpleCrossSceneReferences.Editor
             timer.Start();
 #endif
             
-            List<TemporaryLinkResolver> temporaryResolvers = new List<TemporaryLinkResolver>();
+            List<LinkResolver> temporaryResolvers = new List<LinkResolver>();
             
             // Obtain the CodeGenerator instance which contains Assembly information about XSR fields
             CodeGenerator generator = SimpleCrossSceneReferenceSetup.Generator;
 
             foreach (CodegenClass refClass in generator)
             {
-                foreach (MonoBehaviour refUsage in GameObject.FindObjectsOfType(refClass.ClassType, true))
+                // Proxies are handled differently.
+                if (CodeGenerator.IsProxyImpl(refClass.ClassType))
                 {
-                    CrossSceneReferenceResolver resolver = GetOrCreateResolver(refUsage);
-                    foreach (var fieldInfo in refClass.Members)
-                    {
-                        // Get the field's current value
-                        UnityEngine.Object fieldValue =
-                            fieldInfo.FieldInfo.GetValue(refUsage) as UnityEngine.Object;
-
-                        if (fieldValue == null)
-                        {
-                            CreateNullResolver(resolver, refUsage, fieldInfo);
-                        } 
-                        else 
-                        {
-                            SupportedObjectType type;
-                            GameObject fieldValueGameObject = GetGameObject(fieldValue, out type);
-                            // We don't need to store anything for references within the same scene
-                            if (fieldValueGameObject.scene == refUsage.gameObject.scene)
-                            {
-                                // Null out any existing resolver data pointing to this field
-                                CreateNullResolver(resolver, refUsage, fieldInfo);
-                                continue;
-                            }
-                                
-                            
-                            // Set up a CrossSceneReferenceLocator and get the GUID which has been assigned to that object
-                            string referencedGUID = GetCrossSceneReferenceGUID(fieldValue);
-
-                            // Store the data required so that the link can be restored at runtime
-                            CollectResolveData(resolver, refUsage, fieldInfo.FieldInfo, referencedGUID);
-
-                            // More immediate way to restore the links once save is complete
-                            temporaryResolvers.Add(new TemporaryLinkResolver()
-                            {
-                                Target = refUsage,
-                                Field = fieldInfo.FieldInfo,
-                                Value = fieldValue
-                            });
-
-                            // Set to null during Scene save, otherwise Unity will complain about cross scene refs
-                            fieldInfo.FieldInfo.SetValue(refUsage, null);
-                        }
-                    }
+                    CollectProxy(temporaryResolvers, refClass.ClassType);
+                }
+                else
+                {
+                    CollectClass(temporaryResolvers, refClass);
                 }
             }
-            
+
             TemporaryResolvers[scene] = temporaryResolvers;
             
 #if SIMPLE_CROSS_SCENE_REFERENCES_DEBUG
@@ -121,9 +99,136 @@ namespace SimpleCrossSceneReferences.Editor
 #endif
         }
 
-        static void CreateNullResolver(CrossSceneReferenceResolver resolver, MonoBehaviour refUsage, CodegenClassMember fieldInfo)
+        private static void CollectClass(List<LinkResolver> temporaryResolvers, CodegenClass refClass)
         {
-            CollectResolveData(resolver, refUsage, fieldInfo.FieldInfo, null);
+            // Search all open scenes for GameObject components matching 'refClass'
+            foreach (MonoBehaviour refUsage in UnityEngine.Object.FindObjectsOfType(refClass.ClassType, true))
+            {
+                CrossSceneReferenceResolver resolver = GetOrCreateResolver(refUsage);
+                foreach (CodegenClassMember member in refClass.Members)
+                {
+                    // Get the field's current value
+                    UnityEngine.Object memberValue = member.InfoWrapper.GetValue(refUsage) as UnityEngine.Object;
+
+                    if (memberValue == null)
+                    {
+                        CreateNullResolver(resolver, refUsage, member.InfoWrapper);
+                    }
+                    else
+                    {
+                        GameObject fieldValueGameObject = GetGameObject(memberValue, out SupportedObjectType type);
+                        // We don't need to store anything for references within the same scene
+                        if (fieldValueGameObject.scene == refUsage.gameObject.scene)
+                        {
+                            // Null out any existing resolver data pointing to this field
+                            CreateNullResolver(resolver, refUsage, member.InfoWrapper);
+                            continue;
+                        }
+
+
+                        // Set up a CrossSceneReferenceLocator and get the GUID which has been assigned to that object
+                        string referencedGUID = GetCrossSceneReferenceGUID(memberValue);
+
+                        // Store the data required so that the link can be restored at runtime
+                        CollectResolveData(resolver, refUsage, refUsage.GetType(), member.InfoWrapper.MemberInfo, referencedGUID);
+
+                        // More immediate way to restore the links once save is complete
+                        temporaryResolvers.Add(new TemporaryLinkResolver()
+                        {
+                            Target = refUsage,
+                            Route = member.InfoWrapper,
+                            Value = memberValue
+                        });
+
+                        // Set to null during Scene save, otherwise Unity will complain about cross scene refs
+                        member.InfoWrapper.SetValue(refUsage, null);
+                    }
+                }
+            }
+        }
+
+        private static void CollectProxy(List<LinkResolver> temporaryResolvers, Type proxyType) //AnimTrackProxy
+        {
+            GameObject GetPassthroughGameObject(UnityEngine.Object obj)
+            {
+                if(obj is Component asComponent)
+                {
+                    return asComponent.gameObject;
+                }
+                else if(obj is GameObject asGO)
+                {
+                    return asGO;
+                }
+
+                throw new NotSupportedException($"Unsupported passthrough type {obj.GetType()}.");
+            }
+
+            var proxy = Activator.CreateInstance(proxyType) as CrossSceneReferenceProxy;
+            // Search all open scenes for GameObject components matching the proxy's relevant component type
+            foreach (Component relevantComponent in UnityEngine.Object.FindObjectsOfType(proxy.RelevantComponentType, true))
+            {
+                // Generate a context for the proxy to effectively operate on targets & passthroughs.
+                UnityEngine.Object context = proxy.GenerateContext(relevantComponent);
+                
+                // Iterate through all the proxy-type members contained within the relevant component instance.
+                foreach (UnityEngine.Object target in proxy.GetTargets(context))
+                {
+                    // Obtain the component at the other end of the proxy.
+                    UnityEngine.Object passthrough = proxy.GetPassthrough(target, context);
+
+                    if (passthrough == null)
+                        continue; // No proxying to be done. Skip iteration.
+
+                    // By now, we guarantee a GameObject component with a valid proxy endpoint.
+                    // Create a resolver to connect both proxy endpoints.
+                    CrossSceneReferenceResolver resolver = GetOrCreateResolver(relevantComponent);
+
+                    // Set up a CrossSceneReferenceLocator and get the GUID which has been assigned to the passthrough component.
+                    CrossSceneReferenceLocator loc = GetOrCreateLocator(GetPassthroughGameObject(passthrough));
+
+                    int locGuidIdx = loc.Passthroughs.FindIndex(x => x == passthrough);
+                    if (locGuidIdx == -1)
+                    {
+                        // Only generate new GUID for unique entries.
+                        loc.ComponentGUIDS.Add(GUID.Generate().ToString());
+                        loc.Passthroughs.Add(passthrough);
+
+                        locGuidIdx = loc.ComponentGUIDS.Count - 1;
+                    }
+
+                    // Mark relevant component's scene for saving to serialize the resolver on the Unity scene.
+                    Scene scene = relevantComponent.gameObject.scene;
+                    EditorSceneManager.MarkSceneDirty(scene);
+
+                    // Store the data required so that the link can be restored at runtime
+                    CrossSceneReferenceSetupData data = new CrossSceneReferenceSetupData()
+                    {
+                        ClassHash = CodeGenerator.ClassHashFromType(proxyType),
+                        RouteHash = 0,
+                        Target = target,
+                        GUID = loc.ComponentGUIDS[locGuidIdx],
+                        Context = context
+                    };
+                    resolver.AddResolverData(data);
+
+                    // More immediate way to restore the links once save is complete
+                    temporaryResolvers.Add(new TemporaryProxyLinkResolver() // REVIEW: Consider not overloading Temp Link Resolver. Make specific classes for use case.
+                    {
+                        ProxyType = proxyType,
+                        Target = target,
+                        Value = passthrough,
+                        Context = context
+                    });
+
+                    // Set to null during Scene save, otherwise Unity will complain about cross scene refs
+                    proxy.Set(target, null, relevantComponent);
+                }
+            }
+        }
+
+        static void CreateNullResolver(CrossSceneReferenceResolver resolver, Behaviour refUsage, FieldOrPropertyInfo fieldInfoWrapper)
+        {
+            CollectResolveData(resolver, refUsage, refUsage.GetType(), fieldInfoWrapper?.MemberInfo, null);
         }
 
         // EditorSceneManager.sceneSaved listener
@@ -135,12 +240,23 @@ namespace SimpleCrossSceneReferences.Editor
 #endif
             
             // Restore Cross scene refs
-            List<TemporaryLinkResolver> temporaryResolvers;
-            if (TemporaryResolvers.TryGetValue(scene, out temporaryResolvers))
+            if (TemporaryResolvers.TryGetValue(scene, out List<LinkResolver> temporaryResolvers))
             {
-                foreach (var resolve in temporaryResolvers)
+                foreach (var item in temporaryResolvers)
                 {
-                    resolve.Field.SetValue(resolve.Target, resolve.Value);
+                    if (item is TemporaryProxyLinkResolver pResolver)
+                    {
+                        var proxy = Activator.CreateInstance(pResolver.ProxyType) as CrossSceneReferenceProxy;
+                        proxy.Set(pResolver.Target, pResolver.Value, pResolver.Context);
+                    }
+                    else if(item is TemporaryLinkResolver sResolver)
+                    {
+                        (sResolver.Route as FieldOrPropertyInfo).SetValue(sResolver.Target, sResolver.Value);
+                    }
+                    else
+                    {
+                        throw new InvalidCastException($"Unsupported resolver type detected: {item}");
+                    }
                 }
             }
             
@@ -153,9 +269,8 @@ namespace SimpleCrossSceneReferences.Editor
         // Find or create a resolver in the target GameObject
         static CrossSceneReferenceResolver GetOrCreateResolver(UnityEngine.Object subject)
         {
-            MonoBehaviour behaviour = subject as MonoBehaviour;
-            Component resolverRef;
-            if (!behaviour.TryGetComponent(typeof(CrossSceneReferenceResolver), out resolverRef))
+            Behaviour behaviour = subject as Behaviour;
+            if (!behaviour.TryGetComponent(typeof(CrossSceneReferenceResolver), out Component resolverRef))
             {
                 resolverRef = behaviour.gameObject.AddComponent<CrossSceneReferenceResolver>();
             }
@@ -166,15 +281,14 @@ namespace SimpleCrossSceneReferences.Editor
         }
 
         // Collect the data required to set the link back up at runtime
-        static void CollectResolveData(CrossSceneReferenceResolver resolver, UnityEngine.Object target, FieldInfo field,
-            string GUID)
+        static void CollectResolveData(CrossSceneReferenceResolver resolver, UnityEngine.Object target, Type targetType, MemberInfo member, string GUID)
         {
             if (resolver != null)
             {
                 CrossSceneReferenceSetupData data = new CrossSceneReferenceSetupData()
                 {
-                    ClassHash = CodeGenerator.ClassHashFromType(target.GetType()),
-                    FieldHash = field.Name.GetHashCode(),
+                    ClassHash = CodeGenerator.ClassHashFromType(targetType),
+                    RouteHash = member.Name.GetHashCode(),
                     Target = target,
                     GUID = GUID
                 };
@@ -223,8 +337,7 @@ namespace SimpleCrossSceneReferences.Editor
             if (target == null)
                 return null;
 
-            SupportedObjectType type;
-            GameObject targetObject = GetGameObject(target, out type);
+            GameObject targetObject = GetGameObject(target, out SupportedObjectType type);
             if (type == SupportedObjectType.NULL)
                 return null;
 
@@ -237,18 +350,18 @@ namespace SimpleCrossSceneReferences.Editor
                     return loc.GameObjectGUID;
                 case SupportedObjectType.MonoBehaviour:
                 case SupportedObjectType.Component:
-                    Component comp = target as Component;;
-                    for (int i = 0; i < loc.Components.Count; i++)
+                    Component comp = target as Component;
+                    for (int i = 0; i < loc.Passthroughs.Count; i++)
                     {
                         // If there is already a GUID for this object, return it
-                        if (loc.Components[i] == comp)
+                        if (loc.Passthroughs[i] == comp)
                             return loc.ComponentGUIDS[i];
                     }
 
                     // Create a new GUID if needed
                     string guid = GUID.Generate().ToString();
                     loc.ComponentGUIDS.Add(guid);
-                    loc.Components.Add(comp);
+                    loc.Passthroughs.Add(comp);
                 
                     Scene scene = comp.gameObject.scene;
                     EditorSceneManager.MarkSceneDirty(scene);
@@ -266,13 +379,15 @@ namespace SimpleCrossSceneReferences.Editor
             if (loc == null)
             {
                 loc = target.AddComponent<CrossSceneReferenceLocator>();
-                loc.TransformGUID = GUID.Generate().ToString();
-                loc.GameObjectGUID = GUID.Generate().ToString();
-                loc.Components = new List<Component>();
-                loc.ComponentGUIDS = new List<string>();
+                loc.GenerateGUIDs();
                 
                 Scene scene = target.gameObject.scene;
                 EditorSceneManager.MarkSceneDirty(scene);
+            }
+
+            if (string.IsNullOrEmpty(loc.TransformGUID))
+            {
+                loc.GenerateGUIDs();
             }
 
             loc.Prune();

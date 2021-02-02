@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -17,11 +18,27 @@ namespace SimpleCrossSceneReferences
         
         private void Awake()
         {
-            // TODO: Do not run this if the app is exiting playmode
             var instance = CrossSceneReferenceManager.Instance;
+            if (instance == null)
+                // Exiting playmode
+                return;
+            
             foreach (var resolver in ResolverData)
             {
                 instance.RegisterResolver(resolver);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            var instance = CrossSceneReferenceManager.Instance;
+            if (instance == null)
+                // Exiting playmode
+                return;
+            
+            foreach (var resolver in ResolverData)
+            {
+                instance.DeregisterResolver(resolver);
             }
         }
 
@@ -32,7 +49,7 @@ namespace SimpleCrossSceneReferences
             {
                 CrossSceneReferenceSetupData existingData = ResolverData[i];
                 if (existingData.ClassHash == data.ClassHash &&
-                    existingData.FieldHash == data.FieldHash &&
+                    existingData.RouteHash == data.RouteHash &&
                     existingData.Target == data.Target)
                 {
                     existingData.GUID = data.GUID;
