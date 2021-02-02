@@ -9,6 +9,7 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
+using CrossSceneReference = SimpleCrossSceneReferences.CrossSceneReferenceAttribute;
 
 // This file defines the logic required for SimpleXSR to write a programatically-generated script, which
 // can assign values to MonoBehaviour instance fields based on baked data. The generated script
@@ -28,19 +29,33 @@ namespace SimpleCrossSceneReferences.Editor
     // Collection of data used to locate specific fields within a class that use the CrossSceneReference attribute
     public class CodegenClassMember
     {
-        public string FieldName;
-        public Type FieldType;
-        public FieldInfo FieldInfo;
-        public int FieldHash;
+        public readonly string FieldName;
+        public readonly FieldOrPropertyInfo InfoWrapper;
+        public readonly int FieldHash;
+
+        public CodegenClassMember(string fieldName, MemberInfo memberInfo, int fieldHash)
+        {
+            InfoWrapper = new FieldOrPropertyInfo(memberInfo);
+            FieldName = fieldName;
+            FieldHash = fieldHash;
+        }
+
+        public Type FieldType
+        {
+            get
+            {
+                return InfoWrapper.GetDerrivedType();
+            }
+        }
     }
-    
+
     // This class handles creating the script file used to set field values at runtime.
     public class CodeGenerator : IEnumerable<CodegenClass>
     {
-        private static readonly string ClassGUIDCacheStringPrefix = "XSRCachedClassGUID_";
+        static readonly string ClassGUIDCacheStringPrefix = "XSRCachedClassGUID_";
         // Data collected at Editor time, describing the pertinent parts of the User Assembly that we
         // need to represent in the codegen class.
-        private List<CodegenClass> Classes = new List<CodegenClass>();
+        List<CodegenClass> Classes = new List<CodegenClass>();
 
         // Generate the script file
         // Returns true if Generate changed any data on disk.
@@ -56,7 +71,7 @@ namespace SimpleCrossSceneReferences.Editor
             
             // Crawl Assemblies to find classes that use the CrossSceneReference attributes
             CollectCrossSceneScripts();
-            
+
             // Attempt to collect the old contents of the codegen script, if available
             string oldContent = string.Empty;
             string path = SimpleCrossSceneReferenceSetup.CodegenFilePath;
@@ -86,36 +101,79 @@ namespace SimpleCrossSceneReferences.Editor
         // Iterate over assemblies, and build the data representing user classes that use CrossSceneReference attributes
         void CollectCrossSceneScripts()
         {
-            foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
                 foreach (var type in assembly.GetTypes())
                 {
-                    foreach (var field in type.GetFields())
+                    if(IsProxyImpl(type))
                     {
-                        foreach (var attr in field.GetCustomAttributes(true))
-                        {
-                            if (attr.GetType() == typeof(CrossSceneReferenceAttribute))
-                                CollectClassAndField(type, field);
-                        }
+                        CollectProxy(type);
+                    }
+                    else
+                    {
+                        CollectClass(type);
                     }
                 }
             }
         }
-        
-        void CollectClassAndField(System.Type type, FieldInfo info)
+
+        //TODO: maybe put this in the interface and convert interface to abstract class.
+        public static bool IsProxyImpl(System.Type type)
         {
-            if (!typeof(UnityEngine.Object).IsAssignableFrom(info.FieldType))
+            return !type.IsInterface && typeof(CrossSceneReferenceProxy).IsAssignableFrom(type);
+        }
+
+        void CollectProxy(System.Type type)
+        {
+            AddProxy(type);
+        }
+
+        void CollectClass(System.Type type)
+        {
+            foreach (var field in type.GetFields())
             {
-                Debug.LogError($"CrossSceneReference attributes in {type} cannot be used on fields of type {info.FieldType}. Only fields with types that inherit from UnityEngine.Object may be used.");
-                return;
+                if (field.GetCustomAttribute<CrossSceneReference>(true) != null)
+                {
+                    CollectClassAndMember(type, field);
+                }
             }
-            int classHash = AddClass(type);
+
+            foreach (var prop in type.GetProperties())
+            {
+                if(prop.GetCustomAttribute<CrossSceneReference>(true) != null)
+                {
+                    CollectClassAndMember(type, prop);
+                }
+            }
+        }
+
+
+        void CollectClassAndMember(System.Type type, MemberInfo info)
+        {
+            if (info.MemberType == MemberTypes.Field)
+            {
+                FieldInfo fieldInfo = (FieldInfo)info;
+                if(!typeof(UnityEngine.Object).IsAssignableFrom(fieldInfo.FieldType))
+                {
+                    Debug.LogError($"CrossSceneReference attributes in {type} cannot be used on fields of type {fieldInfo.FieldType}. Only fields with types that inherit from UnityEngine.Object may be used.");
+                    return;
+                }
+            }
+            int classHash = AddClass(type, out _);
             AddMember(classHash, info);
+        }
+
+        void AddProxy(Type codegenClass)
+        {
+            AddClass(codegenClass, out CodegenClass proxyClass);
+
+            // Preserve the name of the class (because no codegen will be used).
+            proxyClass.CodegenClassName = codegenClass.Name;
         }
 
         // Add a class to the Classes data
         // Returns the classHash for the class
-        private int AddClass(Type codegenClass)
+        int AddClass(Type codegenClass, out CodegenClass outputClass)
         {
             // Generate the hash, and ensure that we don't already know about the class
             int hash = ClassHashFromType(codegenClass);
@@ -124,6 +182,7 @@ namespace SimpleCrossSceneReferences.Editor
                 if (c.ClassHash == hash)
                 {
                     Debug.Assert(c.ClassName.Equals(codegenClass.ToString()));
+                    outputClass = c;
                     return c.ClassHash;
                 }
             }
@@ -135,16 +194,18 @@ namespace SimpleCrossSceneReferences.Editor
                 ClassName = newClassName,
                 ClassHash = hash,
                 ClassType = codegenClass,
-                CodegenClassName = $"{newClassName}_XSR_Codegen",
+                CodegenClassName = $"{newClassName.Split('.').Last()}_XSR_Codegen",
                 Members = new List<CodegenClassMember>()
             };
             Classes.Add(newClass);
-            
+
+            outputClass = newClass;
+
             return hash;
         }
 
         // Given a classHash, collect data required to populate a CodegenClassMember from the FieldInfo
-        private void AddMember(int classHash, FieldInfo field)
+        private void AddMember(int classHash, MemberInfo member)
         {
             // Attempt to resolve the CodegenClass to which this field belongs
             CodegenClass destClass = null;
@@ -160,7 +221,7 @@ namespace SimpleCrossSceneReferences.Editor
             Debug.Assert(destClass != null);
 
             // Ensure we don't already know about the field
-            string fieldName = field.Name;
+            string fieldName = member.Name;
             int fieldHash = fieldName.GetHashCode();
             foreach (var f in destClass.Members)
             {
@@ -170,15 +231,9 @@ namespace SimpleCrossSceneReferences.Editor
                     return;
                 }
             }
-            
+
             // Create the collection of data we need for the CodegenClassMember instance
-            CodegenClassMember newMember = new CodegenClassMember()
-            {
-                FieldName = fieldName,
-                FieldHash = fieldHash,
-                FieldType = field.FieldType,
-                FieldInfo =  field
-            };
+            CodegenClassMember newMember = new CodegenClassMember(fieldName, member, fieldHash);
             destClass.Members.Add(newMember);
         }
 
@@ -186,8 +241,7 @@ namespace SimpleCrossSceneReferences.Editor
         // a MonoBehaviour that does not live in its own file (it won't have its own GUID), throw an error unless
         // the users has waived this protection by using the WeakClassReferenceAttribute.
         public static int ClassHashFromType(System.Type t)
-        {
-            
+        {     
             if (typeof(MonoBehaviour).IsAssignableFrom(t))
             {
                 // If the type has been decorated with the WeakClassReferenceAttribute, it's ok to just use the name
@@ -207,6 +261,7 @@ namespace SimpleCrossSceneReferences.Editor
                     // Scan the filesystem for a file matching the type, assuming that MonoBehaviours live in script
                     // files with the same name
                     var path = FileSystemUtil.FindScriptFileForClass(t);
+
                     Debug.Assert(!string.IsNullOrEmpty(path), $"Unable to find script representing class {t.Name}. Either put this class in its own script file, or use the [WeakClassReferenceAttribute] attribute. This attribute means you accept the risk of breaking any references to these classes if they are renamed.");
                     path = FileSystemUtil.SystemPathToAssetPath(path);
                     string guid = AssetDatabase.AssetPathToGUID(path);
@@ -250,7 +305,7 @@ namespace SimpleCrossSceneReferences.Editor
             b.AppendLine("namespace XSR.Codegen {");
             b.AppendLine("public static class CrossSceneReference_Codegen_Entry {");
             b.AppendLine(
-                "    public static void Set(int classHash, int fieldHash, UnityEngine.Object target, UnityEngine.Object value){");
+                "    public static void Set(int classHash, int fieldHash, object target, object value, object context){");
 
             // Generate the code to forward assignment data to the proper generated class
             foreach (var klass in Classes)
@@ -264,8 +319,12 @@ namespace SimpleCrossSceneReferences.Editor
             b.AppendLine("}");
             
             // Generate the code representing each of the generated classes
-            foreach (var klass in Classes)
+            foreach (CodegenClass klass in Classes)
             {
+                // Skip proxies. They are not generated (handwritten).
+                if (IsProxyImpl(klass.ClassType))
+                    continue;
+
                 GenerateClassImplementation(b, klass);
             }
 
@@ -276,7 +335,15 @@ namespace SimpleCrossSceneReferences.Editor
         void GenerateClassInvocation(StringBuilder builder, CodegenClass klass)
         {
             builder.AppendLine($"        if(classHash == {klass.ClassHash}) {{");
-            builder.AppendLine($"            {klass.CodegenClassName}.Set(fieldHash, target, value);");
+
+            if (IsProxyImpl(klass.ClassType))
+            {
+                builder.AppendLine($"            new {klass.CodegenClassName}().Set(target, value, context);");
+            }
+            else
+            { 
+                builder.AppendLine($"            {klass.CodegenClassName}.Set(fieldHash, target, value);");
+            }
             builder.AppendLine($"            return;");
             builder.AppendLine($"        }}");
         }
@@ -286,7 +353,7 @@ namespace SimpleCrossSceneReferences.Editor
         {
             builder.AppendLine($"public static class {klass.CodegenClassName} {{");
             builder.AppendLine(
-                "    public static void Set(int fieldHash, UnityEngine.Object target, UnityEngine.Object value){");
+                "    public static void Set(int fieldHash, object target, object value){");
             builder.AppendLine($"        {klass.ClassType} behaviour = target as {klass.ClassType};");
 
             // Add code to handle each of the CrossSceneReference fields

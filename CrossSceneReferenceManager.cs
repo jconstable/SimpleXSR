@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -21,7 +22,7 @@ namespace SimpleCrossSceneReferences
         public static CrossSceneReferenceManager Instance
         {
             get
-            {
+            {                
                 if (!_IsSetup)
                 {
                     // Create a host GameObject with a CrossSceneReferenceManager
@@ -85,6 +86,17 @@ namespace SimpleCrossSceneReferences
             ResolveLinks();
         }
 
+        public void DeregisterResolver(CrossSceneReferenceSetupData resolver)
+        {
+            for (int i = ResolveTargets.Count - 1; i >= 0; i--)
+            {
+                if (ResolveTargets[i].Target == resolver.Target)
+                {
+                    ResolveTargets.RemoveAt(i);
+                }
+            }
+        }
+
         // Scan the list of pending resolvers, and see if we have an Object mapped to the requested GUID.
         // Once a resolver is complete, it will be removed from the list.
         // GUID maps are only removed once the target Object is destroyed
@@ -104,11 +116,10 @@ namespace SimpleCrossSceneReferences
                 for (int i = ResolveTargets.Count - 1; i >= 0; i--)
                 {
                     CrossSceneReferenceSetupData resolve = ResolveTargets[i];
-                    Object o;
-                    if (LinkTargets.TryGetValue(resolve.GUID, out o))
+                    if (LinkTargets.TryGetValue(resolve.GUID, out Object Value))
                     {
                         // A mapped GUID was found. Use the codegen class to assign the Object value to the field
-                        XSR.Codegen.CrossSceneReference_Codegen_Entry.Set(resolve.ClassHash, resolve.FieldHash,resolve.Target, o);
+                        XSR.Codegen.CrossSceneReference_Codegen_Entry.Set(resolve.ClassHash, resolve.RouteHash, resolve.Target, Value, resolve.Context);
                         ResolveTargets.RemoveAt(i);
                     }
                 }
@@ -127,8 +138,9 @@ namespace SimpleCrossSceneReferences
     public struct CrossSceneReferenceSetupData
     {
         public int ClassHash;
-        public int FieldHash;
+        public int RouteHash;
         public Object Target;
         public string GUID;
+        public Object Context;
     }
 }
