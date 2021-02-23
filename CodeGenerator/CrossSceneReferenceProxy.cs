@@ -9,7 +9,7 @@ namespace SimpleCrossSceneReferences
     /// </summary>
     public interface CrossSceneReferenceProxy
     {
-        public void Set(Object target, Object value, Object context);
+        public void Set(int routeHash, Object target, Object value, Object context);
     
         /// <summary>
         /// The component type that is searched for accross all scenes for Cross Scene Reference processing.
@@ -21,7 +21,7 @@ namespace SimpleCrossSceneReferences
         /// </summary>
         /// <param name="target"></param>
         /// <returns>UnityEngine.Component referenced by the target.</returns>
-        public UnityEngine.Object GetPassthrough(Object target, Object context);
+        public UnityEngine.Object GetPassthrough(ref Object target, Object context);
 
         /// <summary>
         /// Obtains all members identified within the Context which directly
@@ -35,6 +35,21 @@ namespace SimpleCrossSceneReferences
         /// </summary>
         /// <param name="relevantComponent"></param>
         /// <returns>A Context instance to be used in subsequent operations.</returns>
-        public UnityEngine.Object GenerateContext(Component relevantComponent);
+        public UnityEngine.Object AcquireContext(Component relevantComponent);
+
+        /// <summary>
+        /// Generates a unique ID of the Target's field/member intended to reference
+        /// the passthrough.
+        /// </summary>
+        /// <param name="passthrough"></param>
+        /// <param name="context"></param>
+        /// <returns>A numeric ID, usually a hash of the field/member's name string.</returns>
+        public int GenerateRouteHash(Object passthrough, Object context);
+
+        /// <summary>
+        /// Conducts proxy-specific logic to stop tracking or dispose of its associated context.
+        /// </summary>
+        /// <param name="context"></param>
+        public void ReleaseContext(Object context);
     }
 }

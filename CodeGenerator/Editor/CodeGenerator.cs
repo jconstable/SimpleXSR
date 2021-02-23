@@ -130,7 +130,7 @@ namespace SimpleCrossSceneReferences.Editor
 
         void CollectClass(System.Type type)
         {
-            foreach (var field in type.GetFields())
+            foreach (var field in type.GetFields(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic))
             {
                 if (field.GetCustomAttribute<CrossSceneReference>(true) != null)
                 {
@@ -147,18 +147,24 @@ namespace SimpleCrossSceneReferences.Editor
             }
         }
 
-
         void CollectClassAndMember(System.Type type, MemberInfo info)
         {
+            Type assignableType = null;
             if (info.MemberType == MemberTypes.Field)
             {
-                FieldInfo fieldInfo = (FieldInfo)info;
-                if(!typeof(UnityEngine.Object).IsAssignableFrom(fieldInfo.FieldType))
-                {
-                    Debug.LogError($"CrossSceneReference attributes in {type} cannot be used on fields of type {fieldInfo.FieldType}. Only fields with types that inherit from UnityEngine.Object may be used.");
-                    return;
-                }
+                assignableType = (info as FieldInfo).FieldType;
             }
+            else if (info.MemberType == MemberTypes.Property)
+            {
+                assignableType = (info as PropertyInfo).PropertyType;
+            }
+
+            if (!typeof(UnityEngine.Object).IsAssignableFrom(assignableType))
+            {
+                Debug.LogError($"CrossSceneReference attributes in {type} cannot be used on fields of type {assignableType}. Only fields with types that inherit from UnityEngine.Object may be used.");
+                return;
+            }
+
             int classHash = AddClass(type, out _);
             AddMember(classHash, info);
         }
@@ -302,10 +308,10 @@ namespace SimpleCrossSceneReferences.Editor
         {
             StringBuilder b = new StringBuilder();
             b.AppendLine("using System;");
+            b.AppendLine("using System.Reflection;");
             b.AppendLine("namespace XSR.Codegen {");
             b.AppendLine("public static class CrossSceneReference_Codegen_Entry {");
-            b.AppendLine(
-                "    public static void Set(int classHash, int fieldHash, object target, object value, object context){");
+            b.AppendLine("    public static void Set(int classHash, int fieldHash, object target, object value, object context){");
 
             // Generate the code to forward assignment data to the proper generated class
             foreach (var klass in Classes)
@@ -338,7 +344,7 @@ namespace SimpleCrossSceneReferences.Editor
 
             if (IsProxyImpl(klass.ClassType))
             {
-                builder.AppendLine($"            new {klass.CodegenClassName}().Set(target, value, context);");
+                builder.AppendLine($"            new {klass.CodegenClassName}().Set(fieldHash, target, value, context);");
             }
             else
             { 
@@ -352,8 +358,7 @@ namespace SimpleCrossSceneReferences.Editor
         void GenerateClassImplementation(StringBuilder builder, CodegenClass klass)
         {
             builder.AppendLine($"public static class {klass.CodegenClassName} {{");
-            builder.AppendLine(
-                "    public static void Set(int fieldHash, object target, object value){");
+            builder.AppendLine($"    public static void Set(int fieldHash, object target, object value){{");
             builder.AppendLine($"        {klass.ClassType} behaviour = target as {klass.ClassType};");
 
             // Add code to handle each of the CrossSceneReference fields
@@ -363,15 +368,32 @@ namespace SimpleCrossSceneReferences.Editor
             }
 
             builder.AppendLine($"        throw new Exception($\"Unable to resolve field for fieldHash {{fieldHash}}.\");");
-            builder.AppendLine("    }");
-            builder.AppendLine("}");
+            builder.AppendLine($"    }}");
+            builder.AppendLine($"}}");
         }
 
         // Add code for each of the fields
         void GenerateFieldImplementation(StringBuilder builder, CodegenClassMember member)
         {
             builder.AppendLine($"        if(fieldHash == {member.FieldHash}) {{");
-            builder.AppendLine($"            behaviour.{member.FieldName} = value as {member.FieldType};");
+            if (member.InfoWrapper.IsPublic())
+            {
+                builder.AppendLine($"            behaviour.{member.FieldName} = value as {member.FieldType};");
+            }
+            else
+            {
+                switch (member.InfoWrapper.MemberInfo.MemberType)
+                {
+                    case MemberTypes.Field:
+                        builder.AppendLine($"            behaviour.GetType().GetField(\"{ member.FieldName}\", BindingFlags.Instance|BindingFlags.NonPublic).SetValue(behaviour, value); ");
+                        break;
+                    case MemberTypes.Property:
+                        builder.AppendLine($"            behaviour.GetType().GetProperty(\"{ member.FieldName}\", BindingFlags.Instance|BindingFlags.NonPublic).SetValue(behaviour, value); ");
+                        break;
+                    default:
+                        break;
+                }
+            }
             builder.AppendLine($"            return;");
             builder.AppendLine("        }");
         }

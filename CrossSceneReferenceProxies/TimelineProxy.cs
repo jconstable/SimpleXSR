@@ -13,14 +13,14 @@ public struct TimelineProxy : CrossSceneReferenceProxy
 {
     public Type RelevantComponentType { get => typeof(PlayableDirector); }
 
-    public UnityEngine.Object GetPassthrough(Object target, Object context)
+    public UnityEngine.Object GetPassthrough(ref object target, object context)
     {
         PlayableDirector director = context as PlayableDirector;
         TrackAsset externRefTrack = target as TrackAsset;
         return director.GetGenericBinding(externRefTrack);
     }
 
-    public void Set(Object target, Object value, Object context)
+    public void Set(int routeHash, object target, object value, object context)
     {
         var trackBinding = value as UnityEngine.Object;
         var timelineTrack = target as TrackAsset;
@@ -32,7 +32,7 @@ public struct TimelineProxy : CrossSceneReferenceProxy
             director.SetGenericBinding(timelineTrack, trackBinding);
     }
 
-    public UnityEngine.Object[] GetTargets(Object context)
+    public UnityEngine.Object[] GetTargets(object context)
     {
         // For each instance, parse the AnimationTracks within, and identify 
         // which tracks are bound to GameObjects/Components from outside this PlayableDirector's scene.
@@ -50,11 +50,11 @@ public struct TimelineProxy : CrossSceneReferenceProxy
 
                 bool doParentScenesMatch = true; // Initialized to a safe default value.
 
-                if(timelineTrackBoundObject is GameObject asGO)
+                if (timelineTrackBoundObject is GameObject asGO)
                 {
                     doParentScenesMatch = (asGO.scene == director.gameObject.scene);
                 }
-                else if(timelineTrackBoundObject is Component asCmp)
+                else if (timelineTrackBoundObject is Component asCmp)
                 {
                     doParentScenesMatch = (asCmp.gameObject.scene == director.gameObject.scene);
                 }
@@ -69,9 +69,20 @@ public struct TimelineProxy : CrossSceneReferenceProxy
         return externRefTimelineTrack.ToArray();
     }
 
-    public UnityEngine.Object GenerateContext(Component relevantComponent)
+    public UnityEngine.Object AcquireContext(Component relevantComponent)
     {
         // Our context is simply the PlayableDirector itself. Nothing to process here.
         return relevantComponent as PlayableDirector;
+    }
+    public int GenerateRouteHash(object passthrough, object context)
+    {
+        // This proxy does not make use of route hashes.
+        return 0;
+    }
+
+    public void ReleaseContext(object context)
+    {
+        // The context is the PlayableDirector itself.
+        // As such, no context is allocated, and therefore no context should be released/destroyed.
     }
 }

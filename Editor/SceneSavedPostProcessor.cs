@@ -57,6 +57,7 @@ namespace SimpleCrossSceneReferences.Editor
         {
             public Type ProxyType;
             public Object Target;
+            public int Route;
             public Object Value;
             public Object Context;
         }
@@ -164,17 +165,30 @@ namespace SimpleCrossSceneReferences.Editor
             }
 
             var proxy = Activator.CreateInstance(proxyType) as CrossSceneReferenceProxy;
+
             // Search all open scenes for GameObject components matching the proxy's relevant component type
             foreach (Component relevantComponent in UnityEngine.Object.FindObjectsOfType(proxy.RelevantComponentType, true))
             {
                 // Generate a context for the proxy to effectively operate on targets & passthroughs.
-                UnityEngine.Object context = proxy.GenerateContext(relevantComponent);
-                
+                UnityEngine.Object context = proxy.AcquireContext(relevantComponent);
+
                 // Iterate through all the proxy-type members contained within the relevant component instance.
-                foreach (UnityEngine.Object target in proxy.GetTargets(context))
+                UnityEngine.Object[] proxyTargets = proxy.GetTargets(context);
+
+                // However, if there are no valid targets, the context is useless. 
+                // No further logic is necessary for this iteration. Let's interrupt & dispose.
+                if(proxyTargets == null || proxyTargets.Length == 0)
                 {
+                    proxy.ReleaseContext(context);
+                    continue;
+                }
+
+                for (int i = 0; i < proxyTargets.Length; ++i)
+                {
+                    var target = proxyTargets[i] as object;
+
                     // Obtain the component at the other end of the proxy.
-                    UnityEngine.Object passthrough = proxy.GetPassthrough(target, context);
+                    UnityEngine.Object passthrough = proxy.GetPassthrough(ref target, context);
 
                     if (passthrough == null)
                         continue; // No proxying to be done. Skip iteration.
@@ -204,8 +218,8 @@ namespace SimpleCrossSceneReferences.Editor
                     CrossSceneReferenceSetupData data = new CrossSceneReferenceSetupData()
                     {
                         ClassHash = CodeGenerator.ClassHashFromType(proxyType),
-                        RouteHash = 0,
-                        Target = target,
+                        RouteHash = proxy.GenerateRouteHash(passthrough, context),
+                        Target = target as UnityEngine.Object,
                         GUID = loc.ComponentGUIDS[locGuidIdx],
                         Context = context
                     };
@@ -217,11 +231,12 @@ namespace SimpleCrossSceneReferences.Editor
                         ProxyType = proxyType,
                         Target = target,
                         Value = passthrough,
-                        Context = context
+                        Context = context,
+                        Route = data.RouteHash
                     });
 
                     // Set to null during Scene save, otherwise Unity will complain about cross scene refs
-                    proxy.Set(target, null, relevantComponent);
+                    proxy.Set(data.RouteHash, target, null, context);
                 }
             }
         }
@@ -247,7 +262,7 @@ namespace SimpleCrossSceneReferences.Editor
                     if (item is TemporaryProxyLinkResolver pResolver)
                     {
                         var proxy = Activator.CreateInstance(pResolver.ProxyType) as CrossSceneReferenceProxy;
-                        proxy.Set(pResolver.Target, pResolver.Value, pResolver.Context);
+                        proxy.Set(pResolver.Route, pResolver.Target, pResolver.Value, pResolver.Context);
                     }
                     else if(item is TemporaryLinkResolver sResolver)
                     {

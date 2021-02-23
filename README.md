@@ -8,6 +8,8 @@ SimpleXSR provides an easy way to support cross-scene references in Unity, at a 
 * Transforms
 * Components (necessarily including MonoBehaviours)
 
+Additional types can be supported via Proxy Extenstions. This is an advanced topic, see below.
+
 ## Known issues
 * Error when exiting play mode, due to recreation of Manager instance
 
@@ -49,8 +51,23 @@ These behaviours store only references to Objects within the same Scene, as well
 
 At runtime, when CrossSceneReferenceLocator and CrossSceneReferenceResolver Awake(), they will register with a Singleton manager that attempts to establish links. These links will be given to the automatically generated class, which handles field value assignment.
 
+## Proxy Extensions (Advanced)
+Third-party types from external packages and/or projects are sometimes immutable. In other cases, you might not want to maintain another project for the sole purpose of adding the `[CrossSceneReference]` tag to the alien classes. To incorporate the use of SimpleXSR without modifying third-party code, we can implement the [CrossSceneReferenceProxy](CodeGenerator/CrossSceneReferenceProxy.cs) interface on a custom struct. No additional changes are needed because the SimpleXSR system seamlessly processes any `CrossSceneReferenceProxy` class in the same pipeline as the `[CrossSceneReference]`tagged candidates.
+
+For an example on how to implement your own XSR proxy, you can view the [TimelineProxy](CrossSceneReferenceProxies/TimelineProxy.cs) implementation.
+Key concepts for proxies are as follows:
+
+### Target
+A target refers to a field within the immutable object implemented by an external codebase. Generally, this will be a member of a Component on a GameObject.
+
+### Passthrough
+A target\'s passthrough value is expected to be a reference to a Component residing in an external scene. The proxy communicates with the target to extract the passthrough, which is parsed into the `CrossSceneReferenceResolver` to enable XSR behaviors.
+
+### Context
+Sometimes, additional data must persist beyond the scope of proxy method invocations in order to properly resolve targets/passthroughs. Often times this is not needed, as the target\'s encapsulating Component has all the data you need. In such cases, the context is simply the aformentioned Component.
+
 ## Troubleshooting
-If you are encountering issues with your references saving, you can enable more inspector functionality by adding the SIMPLE_CROSS_SCENE_REFERENCES_DEBUG define to your Player's scripting defines.
+If you are encountering issues with your references saving, you can enable more inspector functionality by adding the SIMPLE_CROSS_SCENE_REFERENCES_DEBUG define to your Player\'s scripting defines.
 
 ## TODO
 * Better enforcement of GUID uniqueness
@@ -64,6 +81,10 @@ This is a sample of the codegen output that SimpleXSR uses at runtime for link r
 // CrossSceneReference manager passes resolved link data into this entry point
 public static class CrossSceneReference_Codegen_Entry {
     public static void Set(int classHash, int fieldHash, UnityEngine.Object target, UnityEngine.Object value){
+        if(classHash == 1764062595) {
+            new TimelineProxy().Set(fieldHash, target, value, context);
+            return;
+        }
         if(classHash == -1458364425) {
             SimpleBehaviour_XSR_Codegen.Set(fieldHash, target, value);
             return;
