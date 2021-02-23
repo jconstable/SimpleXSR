@@ -52,5 +52,18 @@ namespace SimpleCrossSceneReferences
                     throw new NotImplementedException();
             }
         }
+
+        public bool IsPublic()
+        {
+            switch (MemberInfo.MemberType)
+            {
+                case MemberTypes.Property:
+                    return ((PropertyInfo)MemberInfo).GetMethod.IsPublic && ((PropertyInfo)MemberInfo).SetMethod.IsPublic;
+                case MemberTypes.Field:
+                    return ((FieldInfo)MemberInfo).IsPublic;
+                default:
+                    throw new NotImplementedException();
+            }
+        }
     }
 }
